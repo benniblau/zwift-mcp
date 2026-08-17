@@ -109,6 +109,19 @@ verified against a live account with `probe_zwift_api.py` on 2026-08-17.
   can never have those.
 - **FIT downloads are plain S3 objects**, not API calls: no Authorization
   header, and they do not go through `request()`.
+- **Some FIT files are malformed, and one must never stop a batch.** A 2020
+  activity in this account is a 584-byte stub that dies at byte 167 with
+  "local message 2 not defined". `fitdecode` raises `FitParseError`, which is
+  **not** a `RuntimeError` — the original `except (ZwiftError, RuntimeError,
+  OSError)` let it through and it killed a 212-file run at item 151.
+  `parse_fit()` now catches `fitdecode.FitError` around the whole read and
+  returns whatever frames it got plus an `error`, so a file that dies at
+  record 400 of 4000 still yields most of the ride; `backfill_detail()`
+  additionally wraps each activity so nothing at all aborts the loop, and
+  records the unreadable ids in `sync_state`. CRC errors only warn.
+  Failures leave `detail_synced_at` NULL and are retried next run — cheap,
+  since the FIT is cached, and right, since the fix is usually a parser
+  change rather than a re-download.
 - **A FIT without a power meter still has a power channel — all zeros.**
   `download_activity_detail()` checks `has_power` before computing NP, work,
   max power, the curve or power zones; without that check every Zwift run

@@ -797,6 +797,13 @@ def parse_fit(payload: bytes) -> Dict[str, Any]:
     """
     Parse a FIT file into records, laps and a session summary.
 
+    Returns whatever it managed to read, plus an `error` describing why it
+    stopped early if it did. Zwift has written malformed files — some 2020
+    activities are 500-byte stubs that reference an undefined local message
+    and blow up mid-stream — and a decode error partway through a five-year
+    archive must not cost the caller the frames it already had, let alone
+    abort a batch of hundreds.
+
     fitdecode is imported here rather than at module scope so that a
     summary-only sync, and the MCP server, work without it installed.
     """
@@ -819,80 +826,90 @@ def parse_fit(payload: bytes) -> Dict[str, Any]:
         except KeyError:
             return None
 
-    with fitdecode.FitReader(io.BytesIO(payload)) as fit:
-        for frame in fit:
-            if frame.frame_type != fitdecode.FIT_FRAME_DATA:
-                continue
+    error: Optional[str] = None
 
-            if frame.name == "record":
-                ts = value(frame, "timestamp")
-                records.append({
-                    "timestamp": int(ts.timestamp()) if ts else None,
-                    "distance": _num(value(frame, "distance")),
-                    "altitude": _num(value(frame, "enhanced_altitude")
-                                     if value(frame, "enhanced_altitude") is not None
-                                     else value(frame, "altitude")),
-                    "speed": _num(value(frame, "enhanced_speed")
-                                  if value(frame, "enhanced_speed") is not None
-                                  else value(frame, "speed")),
-                    "power": _num(value(frame, "power")),
-                    "heart_rate": _int(value(frame, "heart_rate")),
-                    "cadence": _int(value(frame, "cadence")),
-                    "grade": _num(value(frame, "grade")),
-                    "latitude": _semicircles(value(frame, "position_lat")),
-                    "longitude": _semicircles(value(frame, "position_long")),
-                })
+    # A CRC mismatch alone should not cost a whole ride: warn and read on.
+    # Structural errors still raise, and are caught below.
+    try:
+        with fitdecode.FitReader(io.BytesIO(payload),
+                                 check_crc=fitdecode.CrcCheck.WARN) as fit:
+            for frame in fit:
+                if frame.frame_type != fitdecode.FIT_FRAME_DATA:
+                    continue
 
-            elif frame.name == "lap":
-                ts = value(frame, "start_time")
-                laps.append({
-                    "start_time": int(ts.timestamp()) if ts else None,
-                    "elapsed_time_s": _num(value(frame, "total_elapsed_time")),
-                    "timer_time_s": _num(value(frame, "total_timer_time")),
-                    "distance": _num(value(frame, "total_distance")),
-                    "avg_power": _num(value(frame, "avg_power")),
-                    "max_power": _num(value(frame, "max_power")),
-                    "np": _num(value(frame, "normalized_power")),
-                    "avg_hr": _int(value(frame, "avg_heart_rate")),
-                    "max_hr": _int(value(frame, "max_heart_rate")),
-                    "avg_cadence": _int(value(frame, "avg_cadence")),
-                    "max_cadence": _int(value(frame, "max_cadence")),
-                    "avg_speed": _num(value(frame, "enhanced_avg_speed")
-                                      if value(frame, "enhanced_avg_speed") is not None
-                                      else value(frame, "avg_speed")),
-                    "max_speed": _num(value(frame, "enhanced_max_speed")
-                                      if value(frame, "enhanced_max_speed") is not None
-                                      else value(frame, "max_speed")),
-                    "ascent": _num(value(frame, "total_ascent")),
-                    "descent": _num(value(frame, "total_descent")),
-                    "calories": _num(value(frame, "total_calories")),
-                })
+                if frame.name == "record":
+                    ts = value(frame, "timestamp")
+                    records.append({
+                        "timestamp": int(ts.timestamp()) if ts else None,
+                        "distance": _num(value(frame, "distance")),
+                        "altitude": _num(value(frame, "enhanced_altitude")
+                                         if value(frame, "enhanced_altitude") is not None
+                                         else value(frame, "altitude")),
+                        "speed": _num(value(frame, "enhanced_speed")
+                                      if value(frame, "enhanced_speed") is not None
+                                      else value(frame, "speed")),
+                        "power": _num(value(frame, "power")),
+                        "heart_rate": _int(value(frame, "heart_rate")),
+                        "cadence": _int(value(frame, "cadence")),
+                        "grade": _num(value(frame, "grade")),
+                        "latitude": _semicircles(value(frame, "position_lat")),
+                        "longitude": _semicircles(value(frame, "position_long")),
+                    })
 
-            elif frame.name == "session" and not session:
-                session = {
-                    "distance": _num(value(frame, "total_distance")),
-                    "elapsed_time_s": _num(value(frame, "total_elapsed_time")),
-                    "timer_time_s": _num(value(frame, "total_timer_time")),
-                    "avg_power": _num(value(frame, "avg_power")),
-                    "max_power": _num(value(frame, "max_power")),
-                    "np": _num(value(frame, "normalized_power")),
-                    "avg_hr": _int(value(frame, "avg_heart_rate")),
-                    "max_hr": _int(value(frame, "max_heart_rate")),
-                    "avg_cadence": _int(value(frame, "avg_cadence")),
-                    "max_cadence": _int(value(frame, "max_cadence")),
-                    "avg_speed": _num(value(frame, "enhanced_avg_speed")
-                                      if value(frame, "enhanced_avg_speed") is not None
-                                      else value(frame, "avg_speed")),
-                    "max_speed": _num(value(frame, "enhanced_max_speed")
-                                      if value(frame, "enhanced_max_speed") is not None
-                                      else value(frame, "max_speed")),
-                    "ascent": _num(value(frame, "total_ascent")),
-                    "descent": _num(value(frame, "total_descent")),
-                    "calories": _num(value(frame, "total_calories")),
-                    "work_kj": (_num(value(frame, "total_work")) or 0) / 1000.0 or None,
-                }
+                elif frame.name == "lap":
+                    ts = value(frame, "start_time")
+                    laps.append({
+                        "start_time": int(ts.timestamp()) if ts else None,
+                        "elapsed_time_s": _num(value(frame, "total_elapsed_time")),
+                        "timer_time_s": _num(value(frame, "total_timer_time")),
+                        "distance": _num(value(frame, "total_distance")),
+                        "avg_power": _num(value(frame, "avg_power")),
+                        "max_power": _num(value(frame, "max_power")),
+                        "np": _num(value(frame, "normalized_power")),
+                        "avg_hr": _int(value(frame, "avg_heart_rate")),
+                        "max_hr": _int(value(frame, "max_heart_rate")),
+                        "avg_cadence": _int(value(frame, "avg_cadence")),
+                        "max_cadence": _int(value(frame, "max_cadence")),
+                        "avg_speed": _num(value(frame, "enhanced_avg_speed")
+                                          if value(frame, "enhanced_avg_speed") is not None
+                                          else value(frame, "avg_speed")),
+                        "max_speed": _num(value(frame, "enhanced_max_speed")
+                                          if value(frame, "enhanced_max_speed") is not None
+                                          else value(frame, "max_speed")),
+                        "ascent": _num(value(frame, "total_ascent")),
+                        "descent": _num(value(frame, "total_descent")),
+                        "calories": _num(value(frame, "total_calories")),
+                    })
 
-    return {"records": records, "laps": laps, "session": session}
+                elif frame.name == "session" and not session:
+                    session = {
+                        "distance": _num(value(frame, "total_distance")),
+                        "elapsed_time_s": _num(value(frame, "total_elapsed_time")),
+                        "timer_time_s": _num(value(frame, "total_timer_time")),
+                        "avg_power": _num(value(frame, "avg_power")),
+                        "max_power": _num(value(frame, "max_power")),
+                        "np": _num(value(frame, "normalized_power")),
+                        "avg_hr": _int(value(frame, "avg_heart_rate")),
+                        "max_hr": _int(value(frame, "max_heart_rate")),
+                        "avg_cadence": _int(value(frame, "avg_cadence")),
+                        "max_cadence": _int(value(frame, "max_cadence")),
+                        "avg_speed": _num(value(frame, "enhanced_avg_speed")
+                                          if value(frame, "enhanced_avg_speed") is not None
+                                          else value(frame, "avg_speed")),
+                        "max_speed": _num(value(frame, "enhanced_max_speed")
+                                          if value(frame, "enhanced_max_speed") is not None
+                                          else value(frame, "max_speed")),
+                        "ascent": _num(value(frame, "total_ascent")),
+                        "descent": _num(value(frame, "total_descent")),
+                        "calories": _num(value(frame, "total_calories")),
+                        "work_kj": (_num(value(frame, "total_work")) or 0) / 1000.0 or None,
+                    }
+    except fitdecode.FitError as e:
+        # Keep the frames already read: a file that dies at record 400
+        # of 4000 still describes most of the ride.
+        error = str(e)
+
+    return {"records": records, "laps": laps, "session": session, "error": error}
 
 
 def power_series(records: List[Dict[str, Any]]) -> List[float]:
@@ -1402,11 +1419,21 @@ class ZwiftDownloader:
         except (ZwiftError, RuntimeError, OSError) as e:
             print(f"    ⚠️  {activity_id}: {e}")
             return False
+        except Exception as e:                           # noqa: BLE001
+            # These are third-party binary files spanning years of format
+            # changes. Whatever one of them does, the batch goes on.
+            print(f"    ⚠️  {activity_id}: unexpected error reading the FIT: "
+                  f"{type(e).__name__}: {e}")
+            return False
 
         records, laps, session = parsed["records"], parsed["laps"], parsed["session"]
         if not records:
-            print(f"    ⚠️  {activity_id}: FIT contained no records")
+            reason = parsed.get("error") or "it contained no records"
+            print(f"    ⚠️  {activity_id}: no usable data in the FIT — {reason}")
             return False
+        if parsed.get("error"):
+            print(f"    ↪︎ partial: kept {len(records)} records, then "
+                  f"{parsed['error']}")
 
         athlete = self._athlete()
         weight = self.weight()
@@ -1543,15 +1570,36 @@ class ZwiftDownloader:
 
         print(f"\n📄  Downloading FIT detail for {len(pending)} activities…")
         done = 0
+        failed: List[str] = []
         for i, row in enumerate(pending, 1):
             print(f"  [{i}/{len(pending)}] {row['name'] or row['activity_id']}")
-            if self.download_activity_detail(row["activity_id"], row["fit_bucket"],
-                                             row["fit_key"], with_samples, refresh):
+            try:
+                ok = self.download_activity_detail(
+                    row["activity_id"], row["fit_bucket"], row["fit_key"],
+                    with_samples, refresh)
+            except Exception as e:                       # noqa: BLE001
+                print(f"    ⚠️  {row['activity_id']}: {type(e).__name__}: {e}")
+                ok = False
+            if ok:
                 done += 1
+            else:
+                failed.append(row["activity_id"])
             time.sleep(0.3)
 
-        self._record_sync("activity_detail", records=done)
-        print(f"  ✅ {done} activities detailed")
+        # Leaving detail_synced_at NULL means a failure is retried on the next
+        # run. That is cheap — the FIT is already cached — and right, because
+        # the fix for most of these is a parser change, not a re-download.
+        message = (f"{len(failed)} unreadable: {', '.join(failed[:10])}"
+                   f"{' …' if len(failed) > 10 else ''}") if failed else None
+        self._record_sync("activity_detail", records=done,
+                          status="ok" if not failed else "partial",
+                          message=message)
+
+        print(f"  ✅ {done} activities detailed"
+              + (f", {len(failed)} skipped as unreadable" if failed else ""))
+        if failed:
+            print(f"     ids: {', '.join(failed[:10])}"
+                  f"{' …' if len(failed) > 10 else ''}")
         return done
 
     # -- ZwiftPower ------------------------------------------------------
