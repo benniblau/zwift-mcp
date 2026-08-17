@@ -1,0 +1,28 @@
+[Unit]
+Description=Zwift MCP Server (Streamable HTTP + REST API)
+After=network.target
+
+[Service]
+Type=simple
+User=zwift-mcp
+Group=zwift-mcp
+WorkingDirectory=/opt/zwift-mcp
+ExecStart=/opt/zwift-mcp/.venv/bin/python /opt/zwift-mcp/mcp_server.py --transport http
+EnvironmentFile=/opt/zwift-mcp/.env
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening.
+# ProtectHome=true is safe only because this unit runs from /opt. If you
+# deploy under /home instead, drop ProtectHome — it would hide the service's
+# own working directory — and point ReadWritePaths at the install path.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/zwift-mcp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

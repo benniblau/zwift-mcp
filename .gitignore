@@ -1,0 +1,37 @@
+# Credentials and secrets
+.env
+.zwift_token.json
+.zwiftpower_session.json
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Cached FIT files — personal training data
+fits/
+
+# API probe dumps contain profile and activity data
+probe_zwift.json
+
+# Logs contain activity names and ids
+*.log
+
+# Notes about the actual deployment — internal hostnames and paths
+DEPLOYMENT.local.md
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp

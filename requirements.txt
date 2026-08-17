@@ -1,0 +1,6 @@
+requests>=2.31.0
+python-dotenv>=1.0.0
+fitdecode>=0.10.0
+mcp>=1.28,<2
+uvicorn>=0.30.0
+starlette>=0.40.0
