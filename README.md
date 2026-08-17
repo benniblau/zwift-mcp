@@ -125,9 +125,11 @@ A nightly sync, staggered against whatever else runs on the box:
 To update a running deployment:
 
 ```bash
-cd /opt/zwift-mcp && git pull && .venv/bin/pip install -qr requirements.txt
-sudo systemctl restart zwift-mcp
+cd /opt/zwift-mcp && ./deploy/update.sh
 ```
+
+That pulls, installs any new dependencies, restarts the unit and checks the
+health endpoint — and refuses to run if tracked files have local edits.
 
 `.env`, the database and `fits/` are gitignored, so a pull never touches
 them. If the pull changes `schema/schema_zwift.sql`, note that there are no
